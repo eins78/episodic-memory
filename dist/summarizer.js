@@ -1,4 +1,31 @@
 import { query } from '@anthropic-ai/claude-agent-sdk';
+import { SUMMARIZER_CONTEXT_MARKER } from './constants.js';
+/**
+ * Get API environment overrides for summarization calls.
+ * Returns full env merged with process.env so subprocess inherits PATH, HOME, etc.
+ *
+ * Env vars (all optional):
+ * - EPISODIC_MEMORY_API_MODEL: Model to use (default: haiku)
+ * - EPISODIC_MEMORY_API_MODEL_FALLBACK: Fallback model on error (default: sonnet)
+ * - EPISODIC_MEMORY_API_BASE_URL: Custom API endpoint
+ * - EPISODIC_MEMORY_API_TOKEN: Auth token for custom endpoint
+ * - EPISODIC_MEMORY_API_TIMEOUT_MS: Timeout for API calls (default: SDK default)
+ */
+function getApiEnv() {
+    const baseUrl = process.env.EPISODIC_MEMORY_API_BASE_URL;
+    const token = process.env.EPISODIC_MEMORY_API_TOKEN;
+    const timeoutMs = process.env.EPISODIC_MEMORY_API_TIMEOUT_MS;
+    if (!baseUrl && !token && !timeoutMs) {
+        return undefined;
+    }
+    // Merge with process.env so subprocess inherits PATH, HOME, etc.
+    return {
+        ...process.env,
+        ...(baseUrl && { ANTHROPIC_BASE_URL: baseUrl }),
+        ...(token && { ANTHROPIC_AUTH_TOKEN: token }),
+        ...(timeoutMs && { API_TIMEOUT_MS: timeoutMs }),
+    };
+}
 export function formatConversationText(exchanges) {
     return exchanges.map(ex => {
         return `User: ${ex.userMessage}\n\nAgent: ${ex.assistantMessage}`;
@@ -12,13 +39,16 @@ function extractSummary(text) {
     // Fallback if no tags found
     return text.trim();
 }
-async function callClaude(prompt, sessionId, useSonnet = false) {
-    const model = useSonnet ? 'sonnet' : 'haiku';
+async function callClaude(prompt, sessionId, useFallback = false) {
+    const primaryModel = process.env.EPISODIC_MEMORY_API_MODEL || 'haiku';
+    const fallbackModel = process.env.EPISODIC_MEMORY_API_MODEL_FALLBACK || 'sonnet';
+    const model = useFallback ? fallbackModel : primaryModel;
     for await (const message of query({
         prompt,
         options: {
             model,
             max_tokens: 4096,
+            env: getApiEnv(),
             resume: sessionId,
             // Don't override systemPrompt when resuming - it uses the original session's prompt
             // Instead, the prompt itself should provide clear instructions
@@ -31,11 +61,11 @@ async function callClaude(prompt, sessionId, useSonnet = false) {
             const result = message.result;
             // Check if result is an API error (SDK returns errors as result strings)
             if (typeof result === 'string' && result.includes('API Error') && result.includes('thinking.budget_tokens')) {
-                if (!useSonnet) {
-                    console.log(`    Haiku hit thinking budget error, retrying with Sonnet`);
+                if (!useFallback) {
+                    console.log(`    ${primaryModel} hit thinking budget error, retrying with ${fallbackModel}`);
                     return await callClaude(prompt, sessionId, true);
                 }
-                // If Sonnet also fails, return error message
+                // If fallback also fails, return error message
                 return result;
             }
             return result;
@@ -66,7 +96,9 @@ export async function summarizeConversation(exchanges, sessionId) {
         const conversationText = sessionId
             ? '' // When resuming, no need to include conversation text - it's already in context
             : formatConversationText(exchanges);
-        const prompt = `Please write a concise, factual summary of this conversation. Output ONLY the summary - no preamble. Claude will see this summary when searching previous conversations for useful memories and information.
+        const prompt = `${SUMMARIZER_CONTEXT_MARKER}.
+
+Please write a concise, factual summary of this conversation. Output ONLY the summary - no preamble. Claude will see this summary when searching previous conversations for useful memories and information.
 
 Summarize what happened in 2-4 sentences. Be factual and specific. Output in <summary></summary> tags.
 
@@ -101,7 +133,9 @@ ${conversationText}`;
     const chunkSummaries = [];
     for (let i = 0; i < chunks.length; i++) {
         const chunkText = formatConversationText(chunks[i]);
-        const prompt = `Please write a concise summary of this part of a conversation in 2-3 sentences. What happened, what was built/discussed. Use <summary></summary> tags.
+        const prompt = `${SUMMARIZER_CONTEXT_MARKER}.
+
+Please write a concise summary of this part of a conversation in 2-3 sentences. What happened, what was built/discussed. Use <summary></summary> tags.
 
 ${chunkText}
 
@@ -120,7 +154,9 @@ Example: <summary>Implemented HID keyboard functionality for ESP32. Hit Bluetoot
         return 'Error: Unable to summarize conversation.';
     }
     // Synthesize chunks into final summary
-    const synthesisPrompt = `Please write a concise, factual summary that synthesizes these part-summaries into one cohesive paragraph. Focus on what was accomplished and any notable technical decisions or challenges. Output in <summary></summary> tags. Claude will see this summary when searching previous conversations for useful memories and information.
+    const synthesisPrompt = `${SUMMARIZER_CONTEXT_MARKER}.
+
+Please write a concise, factual summary that synthesizes these part-summaries into one cohesive paragraph. Focus on what was accomplished and any notable technical decisions or challenges. Output in <summary></summary> tags. Claude will see this summary when searching previous conversations for useful memories and information.
 
 Part summaries:
 ${chunkSummaries.map((s, i) => `${i + 1}. ${s}`).join('\n')}

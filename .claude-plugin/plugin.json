@@ -1,6 +1,6 @@
 {
   "name": "episodic-memory",
-  "version": "1.0.9",
+  "version": "1.0.15",
   "description": "Semantic search for Claude Code conversations. Remember past discussions, decisions, and patterns.",
   "author": {
     "name": "Jesse Vincent",
@@ -17,6 +17,5 @@
       "args": ["${CLAUDE_PLUGIN_ROOT}/cli/mcp-server-wrapper.js"],
       "env": {}
     }
-  },
-  "hooks": "./hooks/hooks.json"
+  }
 }

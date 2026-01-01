@@ -1,5 +1,16 @@
 import os from 'os';
 import path from 'path';
+import fs from 'fs';
+
+/**
+ * Ensure a directory exists, creating it if necessary
+ */
+function ensureDir(dir: string): string {
+  if (!fs.existsSync(dir)) {
+    fs.mkdirSync(dir, { recursive: true });
+  }
+  return dir;
+}
 
 /**
  * Get the personal superpowers directory
@@ -11,20 +22,22 @@ import path from 'path';
  * 4. ~/.config/superpowers (default)
  */
 export function getSuperpowersDir(): string {
+  let dir: string;
+
   if (process.env.EPISODIC_MEMORY_CONFIG_DIR) {
-    return process.env.EPISODIC_MEMORY_CONFIG_DIR;
+    dir = process.env.EPISODIC_MEMORY_CONFIG_DIR;
+  } else if (process.env.PERSONAL_SUPERPOWERS_DIR) {
+    dir = process.env.PERSONAL_SUPERPOWERS_DIR;
+  } else {
+    const xdgConfigHome = process.env.XDG_CONFIG_HOME;
+    if (xdgConfigHome) {
+      dir = path.join(xdgConfigHome, 'superpowers');
+    } else {
+      dir = path.join(os.homedir(), '.config', 'superpowers');
+    }
   }
 
-  if (process.env.PERSONAL_SUPERPOWERS_DIR) {
-    return process.env.PERSONAL_SUPERPOWERS_DIR;
-  }
-
-  const xdgConfigHome = process.env.XDG_CONFIG_HOME;
-  if (xdgConfigHome) {
-    return path.join(xdgConfigHome, 'superpowers');
-  }
-
-  return path.join(os.homedir(), '.config', 'superpowers');
+  return ensureDir(dir);
 }
 
 /**
@@ -33,17 +46,17 @@ export function getSuperpowersDir(): string {
 export function getArchiveDir(): string {
   // Allow test override
   if (process.env.TEST_ARCHIVE_DIR) {
-    return process.env.TEST_ARCHIVE_DIR;
+    return ensureDir(process.env.TEST_ARCHIVE_DIR);
   }
 
-  return path.join(getSuperpowersDir(), 'conversation-archive');
+  return ensureDir(path.join(getSuperpowersDir(), 'conversation-archive'));
 }
 
 /**
  * Get conversation index directory
  */
 export function getIndexDir(): string {
-  return path.join(getSuperpowersDir(), 'conversation-index');
+  return ensureDir(path.join(getSuperpowersDir(), 'conversation-index'));
 }
 
 /**
@@ -63,4 +76,25 @@ export function getDbPath(): string {
  */
 export function getExcludeConfigPath(): string {
   return path.join(getIndexDir(), 'exclude.txt');
+}
+
+/**
+ * Get list of projects to exclude from indexing
+ * Configurable via env var or config file
+ */
+export function getExcludedProjects(): string[] {
+  // Check env variable first
+  if (process.env.CONVERSATION_SEARCH_EXCLUDE_PROJECTS) {
+    return process.env.CONVERSATION_SEARCH_EXCLUDE_PROJECTS.split(',').map(p => p.trim());
+  }
+
+  // Check for config file
+  const configPath = getExcludeConfigPath();
+  if (fs.existsSync(configPath)) {
+    const content = fs.readFileSync(configPath, 'utf-8');
+    return content.split('\n').map(line => line.trim()).filter(line => line && !line.startsWith('#'));
+  }
+
+  // Default: no exclusions
+  return [];
 }

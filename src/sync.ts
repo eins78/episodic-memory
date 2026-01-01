@@ -1,10 +1,12 @@
 import fs from 'fs';
 import path from 'path';
+import { SUMMARIZER_CONTEXT_MARKER } from './constants.js';
+import { getExcludedProjects } from './paths.js';
 
 const EXCLUSION_MARKERS = [
   '<INSTRUCTIONS-TO-EPISODIC-MEMORY>DO NOT INDEX THIS CHAT</INSTRUCTIONS-TO-EPISODIC-MEMORY>',
   'Only use NO_INSIGHTS_FOUND',
-  'Context: This summary will be shown in a list to help users and Claude choose which conversations are relevant',
+  SUMMARIZER_CONTEXT_MARKER,
 ];
 
 function shouldSkipConversation(filePath: string): boolean {
@@ -88,8 +90,14 @@ export async function syncConversations(
 
   // Walk source directory
   const projects = fs.readdirSync(sourceDir);
+  const excludedProjects = getExcludedProjects();
 
   for (const project of projects) {
+    if (excludedProjects.includes(project)) {
+      console.log("\nSkipping excluded project: " + project);
+      continue;
+    }
+
     const projectPath = path.join(sourceDir, project);
     const stat = fs.statSync(projectPath);
 
